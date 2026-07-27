@@ -1,11 +1,15 @@
 mod argparse;
+mod tree_format;
 
 use argparse::{Commands, Args};
-use crate::argparse::{DecodeArgs, EncodeArgs, EstimateArgs};
+use huffman::tree::HuffmanTree;
+use crate::argparse::{DecodeArgs, EncodeArgs, EstimateArgs, TreeArgs, TreeExportFormat};
+use crate::tree_format::ascii_tree_formatter;
 use huffman;
 
 use clap::Parser;
 
+use std::collections::HashMap;
 use std::{fs, io};
 use std::io::Write;
 use std::path::PathBuf;
@@ -18,6 +22,7 @@ fn main() {
         Commands::Encode(encode_args) => handle_encoding(&args, encode_args),
         Commands::Decode(decode_args) => handle_decoding(&args, decode_args),
         Commands::Estimate(est_args) => handle_estimate(&args, est_args),
+        Commands::Tree(tree_args) => handle_tree_command(&args, tree_args),
     }
 }
 
@@ -331,6 +336,196 @@ fn handle_estimate(args: &Args, estimate_args: &EstimateArgs) {
             }
         }
     }
+}
+
+fn handle_tree_command(args: &Args, tree_args: &TreeArgs) {
+    if tree_args.counts && !tree_args.print_table {
+        println!("Warning: --counts has no effect without --table");
+    }
+
+    // Read data from the file on disk, or exit if there was an issue
+    let file_data = read_data_from_file(&tree_args.input, "input file", args.debug);
+    let mut file = PlainFile::new(file_data);
+
+    file.set_chunk_size(tree_args.chunk_size);
+
+    if !file.has_valid_chunk_size() {
+        println!("Error: {} bits is not a valid chunk size for this file", tree_args.chunk_size);
+        std::process::exit(1);
+    }
+
+    if !args.silent {
+        print!("Building encoding tree... ");
+        io::stdout().flush().expect("Error writing to console");
+    }
+    match file.build_tree() {
+        Ok(_) => if !args.silent { println!("DONE"); },
+        Err(e) => {
+            if !args.silent { println!("FAILED"); }
+            println!("Error: Failed to build encoding tree");
+            if !args.silent && args.debug {
+                println!("Debug > The following error occurred while building the tree: {}", e);
+            }
+            std::process::exit(1);
+        }
+    }
+
+    let tree: &HuffmanTree<u64> = file.get_tree().unwrap();
+
+    let mut occurrence_map: Option<HashMap<u64, u32>> = None;
+    if tree_args.tree_path.is_some() || tree_args.print_table {
+        // Both need a formatter
+        let mut formatter: fn(&u64) -> String;
+        let formatter_type: TreeExportFormat;
+        if let Some(format) = &tree_args.format {
+            formatter = match format {
+                TreeExportFormat::Ascii => {
+                    if tree_args.chunk_size <= 8 {
+                        tree_format::ascii_tree_formatter::<true>
+                    } else {
+                        println!("ASCII formatter cannot be used for chunk sizes above 8 bits");
+                        std::process::exit(1);
+                    }
+                },
+                TreeExportFormat::Hex => tree_format::initialised_hex_tree_formatter(tree_args.chunk_size),
+                TreeExportFormat::SmallHex => |x: &u64| format!("{:x}", x),
+                TreeExportFormat::Dec => |t: &u64| t.to_string(),
+                TreeExportFormat::Bin => tree_format::initialised_bin_tree_formatter(tree_args.chunk_size),
+                TreeExportFormat::SmallBin => |t: &u64| format!("{:b}", t),
+            };
+            formatter_type = *format;
+        } else {
+            if tree_args.chunk_size == 8 {
+                formatter = tree_format::ascii_tree_formatter::<true>;
+                formatter_type = TreeExportFormat::Ascii;
+            } else if tree_args.chunk_size % 4 == 0 {
+                formatter = tree_format::initialised_hex_tree_formatter(tree_args.chunk_size);
+                formatter_type = TreeExportFormat::Hex;
+            } else {
+                formatter = |t: &u64| t.to_string();
+                formatter_type = TreeExportFormat::Dec;
+            }
+        }
+
+        if let Some(output_path) = &tree_args.tree_path {
+            let file_content = tree.export_tree_dot(&formatter);
+            match std::fs::write(output_path, file_content) {
+                Ok(_) => println!("Tree exported to {output_path:?}"),
+                Err(e) => println!("Failed to export tree: {e}"),
+            }
+        }
+
+
+        if tree_args.print_table {
+            let mut values = tree.get_values();
+
+            let strlen = match formatter_type {
+                TreeExportFormat::Ascii => 1,
+                TreeExportFormat::Hex => ((tree_args.chunk_size as usize - 1) / 4) + 3,
+                TreeExportFormat::SmallHex => ((tree_args.chunk_size as usize - 1) / 4) + 1,
+                TreeExportFormat::Dec => 2u32.pow(tree_args.chunk_size).ilog10() as usize + 1,
+                TreeExportFormat::Bin => tree_args.chunk_size as usize + 2,
+                TreeExportFormat::SmallBin => tree_args.chunk_size as usize,
+            };
+
+            // Switch to un-escaped ASCII formatter for the terminal
+            if formatter_type == TreeExportFormat::Ascii {
+                formatter = ascii_tree_formatter::<false>
+            }
+
+            let column_width = 5.max(strlen);
+            println!("\nEncoding tree content:");
+            if tree_args.counts {
+                occurrence_map = match file.calculate_occurrences() {
+                    Ok(x) => Some(x),
+                    Err(s) => {
+                        // This has already happened once, why would it fail now?
+                        println!("Failed to calculate value occurrences: {s}");
+                        std::process::exit(1);
+                    }
+                };
+
+                // Sort but include occurrence counts
+                if let Some(ocm) = occurrence_map {
+                    values.sort_by(
+                        |(value_a, (path_a, level_a)), (value_b, (path_b, level_b))|
+                        if level_a != level_b {
+                            level_a.cmp(level_b)
+                        } else if let Some(v_b) = ocm.get(*value_b) {
+                            // Reverse this comparison (highest first)
+                            match v_b.cmp(ocm.get(*value_a).unwrap()) {
+                                std::cmp::Ordering::Equal => {
+                                    path_a.cmp(path_b)
+                                },
+                                x => x
+                            }
+                        } else {
+                            panic!("Value missing from occurrence map");
+                        }
+                    );
+                    // Put it back put it back put it back
+                    occurrence_map = Some(ocm);
+                }
+            } else {
+                occurrence_map = Some(HashMap::new());
+                values.sort_by(
+                    |(_, (path_a, level_a)), (_, (path_b, level_b))|
+                    if level_a != level_b {
+                        level_a.cmp(level_b)
+                    } else {
+                        path_a.cmp(path_b)
+                    }
+                );
+            }
+
+            let path_column_width: usize = 4.max(tree.calculate_depth() as usize);
+            // Cutely borrows your occurrence map
+            if let Some(ocm) = occurrence_map {
+                print!("| {:column_width$} | Path length |", "Value");
+                if tree_args.paths {
+                    print!(" {:path_column_width$} |", "Path");
+                }
+                if tree_args.counts {
+                    print!(" Occurrences |");
+                }
+                println!();
+                for (value, (path, level)) in values {
+                    print!("| {:column_width$} | {:11} |", formatter(&value), level);
+                    if tree_args.paths {
+                        print!(" {:path_column_width$} |", format!("{:0lvl$b}", path, lvl=level as usize));
+                    }
+                    if tree_args.counts {
+                        print!(" {:11} |", ocm.get(value).unwrap());
+                    }
+                    println!();
+                }
+                // Put it back put it back put it back
+                occurrence_map = Some(ocm);
+            }
+        }
+    }
+
+    let stats = if tree_args.counts {
+        file.generate_pre_encoding_statistics(Some(&occurrence_map.unwrap())).unwrap()
+    } else {
+        file.generate_pre_encoding_statistics(None).unwrap()
+    };
+
+    println!("\nStatistics for file {:?} @ chunk size {}b:", tree_args.input, stats.chunk_size);
+    println!("  Original file size:");
+    println!("    Bytes:       {}", stats.decoded_file_size);
+    if tree_args.chunk_size != 8 {
+        println!("    Chunks:      {}", stats.chunk_count);
+    }
+    println!("  Encoded file size:");
+    println!("    Total:       {} bytes", stats.encoded_file_size);
+    println!("      Data:      {} bytes", stats.encoded_data_size);
+    println!("      Tree:      {} bytes", stats.serialised_tree_size);
+    println!("  Data compression ratio: {:.4}", stats.data_compression_ratio);
+    println!("  File compression ratio: {:.4}", stats.file_compression_ratio);
+    println!("  Tree depth:    {} levels", stats.encoding_tree_depth);
+    println!("  Unique chunks: {} / {}", stats.unique_values, 2f32.powi(stats.chunk_size as i32));
+    println!("    Ratio: {:.2}%", stats.covered_values_ratio * 100.0);
 }
 
 fn read_data_from_file(filepath: &PathBuf, filetype: &str, debug: bool) -> Vec<u8> {

@@ -1,4 +1,4 @@
-use crate::calculate::{calculate_levels, count_bytes};
+use crate::calculate::{calculate_levels, count_chunks};
 use crate::file::PlainFile;
 
 use std::collections::HashMap;
@@ -103,8 +103,8 @@ impl PlainFile {
 
 // Moved this function out of the 'impl' to make it easier to multithread
 fn predict_size_for_data(data: &Vec<u8>, chunk_size: u32) -> Result<Prediction, String> {
-    // println!("Running 'count_bytes' for bit size {}", chunk_size);
-    return if let Ok(count_map) = count_bytes(data, chunk_size as u32) {
+    // println!("Running 'count_chunks' for bit size {}", chunk_size);
+    return if let Ok(count_map) = count_chunks(data, chunk_size as u32) {
         // println!("Running calculate_levels for bit size {}", chunk_size);
         let level_map = calculate_levels(count_map.clone());
 

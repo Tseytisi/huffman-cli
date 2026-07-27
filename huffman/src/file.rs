@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use crate::tree::HuffmanTree;
-use crate::encode;
+use crate::{calculate, encode};
 use crate::encode::encode_data;
 use crate::decode::decode_data;
 
@@ -300,6 +301,16 @@ impl PlainFile {
         } else {
             Some(&self.output_data)
         }
+    }
+
+    /// (Re-)calculate the occurrences of each chunk in the input data.
+    /// This is done automatically during the encoding process, and does
+    /// not need to be done manually unless this information is required
+    /// after the encoding process.
+    ///
+    /// Returns a map, mapping a value to the number of times it occurs in the input.
+    pub fn calculate_occurrences(&self) -> Result<HashMap<u64, u32>, String> {
+        calculate::count_chunks(&self.input_data, self.bits)
     }
 
     /// Exports this [PlainFile] to disk. The resulting file will contain the default header, the

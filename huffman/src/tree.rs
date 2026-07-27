@@ -33,14 +33,12 @@
 
 mod serialise;
 use std::cmp::max;
-use std::collections::{HashMap, LinkedList};
+use std::collections::HashMap;
 use std::fmt::{Display, Debug, LowerHex};
 use std::hash::Hash;
 
 /// Restricted binary tree implementation specifically designed to efficiently decode huffman-compressed
 /// files. Values are stored at leafs only, no node should hold a value.
-///
-/// To create a new HuffmanTree, create a new, empty tree first, and
 #[derive(Debug, PartialEq)]
 pub struct HuffmanTree<T> {
     value: Option<T>,

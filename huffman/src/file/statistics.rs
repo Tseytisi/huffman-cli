@@ -1,3 +1,6 @@
+use std::borrow::Cow;
+use std::collections::HashMap;
+
 use crate::file::{PlainFile, HuffmanFile};
 use crate::FILE_HEADER;
 
@@ -67,6 +70,84 @@ impl PlainFile {
         };
         let decoded_file_size = self.input_data.len() as u64;
         let encoded_data_size = self.output_data.len() as u64;
+        let encoded_file_size = encoded_data_size + serialised_tree_size as u64 + FILE_HEADER.len() as u64;
+        let encoded_data_offset = (encoded_file_size - encoded_data_size) as u32;
+        let encoding_tree_depth = self.tree.calculate_depth();
+        let unique_values = self.tree.get_values().len() as u32;
+        let covered_values_ratio = unique_values as f32 / 2f32.powi(self.bits as i32);
+        let chunk_count = (decoded_file_size * 8) / (self.bits as u64);
+        let file_compression_ratio = decoded_file_size as f32 / encoded_file_size as f32;
+        let data_compression_ratio = decoded_file_size as f32 / encoded_data_size as f32;
+
+        Some(Statistics {
+            encoded_file_size,
+            encoded_data_size,
+            encoded_data_offset,
+            serialised_tree_size,
+            decoded_file_size,
+            encoding_tree_depth,
+            unique_values,
+            covered_values_ratio,
+            chunk_size: self.bits,
+            chunk_count,
+            file_compression_ratio,
+            data_compression_ratio,
+        })
+    }
+
+    /// Generates [Statistics] about the file before it has been encoded.
+    ///
+    /// Only needs the encoding tree to work. Will be more expensive than
+    /// [generate_statistics](PlainFile::generate_statistics),
+    /// but cheaper than encoding the file. The returned statistics will identical to calling
+    /// [generate_statistics](PlainFile::generate_statistics) after encoding.
+    ///
+    /// If `occurrence_map` is given, it will not be re-calculated. If
+    /// `occurrence_map` is None, the function will calculate it.
+    /// The occurrence map can be calculated with
+    /// [calculate_occurrences](PlainFile::calculate_occurrences).
+    ///
+    /// Returns `None` if the tree has not been built.
+    /// This function panics if the given occurrence map is missing values.
+    pub fn generate_pre_encoding_statistics(&self, occurrence_map: Option<&HashMap<u64, u32>>) -> Option<Statistics> {
+        if self.tree.is_empty() {
+            return None;
+        }
+
+        // Serialising the tree is a cheaper operation than running 'estimate'...
+        let serialised_tree_size = if let Ok(ser_tree) = self.tree.serialise(self.bits) {
+            ser_tree.len() as u32
+        } else {
+            return None;
+        };
+
+        // Since we may or may not own the map we need here, we need this weird
+        // construction
+        // Schrodinger's map if you will
+        let count_storage: Cow<'_, HashMap<u64, u32>> = match occurrence_map {
+            Some(ocm) => Cow::Borrowed(ocm),
+            None => {
+                match self.calculate_occurrences() {
+                    Ok(ocm) => Cow::Owned(ocm),
+                    Err(_) => return None,
+                }
+            }
+        };
+        let counts: &HashMap<u64, u32> = &count_storage;
+
+        let values = self.tree.get_values();
+        let mut encoded_data_size: u64 = 0;
+        for (value, (_path, level)) in values {
+            if let Some(count) = counts.get(value) {
+                encoded_data_size += *count as u64 * level as u64;
+            } else {
+                panic!("Given occurrence map is missing a value");
+            }
+        }
+
+        encoded_data_size = (encoded_data_size as f64 / 8.0).ceil() as u64;
+
+        let decoded_file_size = self.input_data.len() as u64;
         let encoded_file_size = encoded_data_size + serialised_tree_size as u64 + FILE_HEADER.len() as u64;
         let encoded_data_offset = (encoded_file_size - encoded_data_size) as u32;
         let encoding_tree_depth = self.tree.calculate_depth();

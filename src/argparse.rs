@@ -76,11 +76,14 @@ pub enum Commands {
     #[command(about, long_about = ABOUT_ENCODE, alias = "compress")]
     Encode(EncodeArgs),
     /// Decode a Huffman-encoded file and output its original
-    #[command(about, long_about = ABOUT_DECODE, alias = "uncompress")]
+    #[command(about, long_about = ABOUT_DECODE, alias = "decompress")]
     Decode(DecodeArgs),
     /// Estimate the resulting encoded file sizes for all possible chunk sizes
     #[command(about, long_about = ABOUT_ESTIMATE)]
     Estimate(EstimateArgs),
+    /// Calculate and export only the tree to a Graphviz DOT file
+    #[command(about)]
+    Tree(TreeArgs),
 }
 
 /// Encode a regular file with the Huffman compression algorithm
@@ -138,4 +141,52 @@ pub struct EstimateArgs {
     /// Path and filename of the file to encode
     #[arg(value_name = "FILE")]
     pub input: PathBuf,
+}
+
+/// Calculate and export only the tree to a Graphviz DOT file
+#[derive(Parser, Debug)]
+pub struct TreeArgs {
+    /// Path and filename of the input file
+    #[arg(value_name = "FILE")]
+    pub input: PathBuf,
+
+    /// Number of bits per data chunk to break the original file up in (max 64)
+    #[arg(short, long, default_value_t = 8, value_parser = clap::value_parser!(u32).range(2..=64))]
+    pub chunk_size: u32,
+
+    /// Path and filename of the DOT file to export
+    #[arg(short, long="tree", value_name="FILE")]
+    pub tree_path: Option<PathBuf>,
+
+    /// How to display values in the export file and table
+    #[arg(short, long, value_enum)]
+    pub format: Option<TreeExportFormat>,
+
+    /// Print a table of the encoding tree contents
+    #[arg(short, long="table")]
+    pub print_table: bool,
+
+    /// Calculate the number of occurrences for each chunk and include them in the table
+    #[arg(short='n', long)]
+    pub counts: bool,
+
+    /// Show paths for each value
+    #[arg(short='P', long)]
+    pub paths: bool
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq)]
+pub enum TreeExportFormat {
+    /// Print all values with readable ASCII characters (default for 8bit)
+    Ascii,
+    /// Print all values as prefixed and padded hexadecimals (default for non-8bit multiples of 4)
+    Hex,
+    /// Print all values as plain hexadecimals
+    SmallHex,
+    /// Print all values as decimal integers (default for everything else)
+    Dec,
+    /// Print all values as prefixed and padded binary integers
+    Bin,
+    /// Print all values as plain binary integers
+    SmallBin,
 }

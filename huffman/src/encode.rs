@@ -4,7 +4,7 @@ use crate::calculate::*;
 
 pub fn build_tree(data: &Vec<u8>, bits: u32) -> Result<HuffmanTree<u64>, String> {
     let count_map: HashMap<u64, u32>;
-    match count_bytes(data, bits) {
+    match count_chunks(data, bits) {
         Ok(map) => count_map = map,
         Err(e) => return Err(e),
     }

@@ -6,7 +6,7 @@ use std::cmp::Ordering;
 /// Returns `Err` if the bytes in `data` are not evenly divisible by the number of bits given,
 /// or if `bits` is set to a value above `64`.
 /// Setting `bits` to `8` will ensure this function always returns `Ok`.
-pub fn count_bytes(data: &Vec<u8>, bits: u32) -> Result<HashMap<u64, u32>, String> {
+pub fn count_chunks(data: &Vec<u8>, bits: u32) -> Result<HashMap<u64, u32>, String> {
     if bits > 64 {
         return Err(String::from("Cannot take chunks of more than 64 bits"));
     } else if (data.len() as u32 * 8) % bits != 0 {
